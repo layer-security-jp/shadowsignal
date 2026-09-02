@@ -1,0 +1,6 @@
+ShadowSignal by Layer Security
+Copyright 2026 Layer Security
+
+Windows live capture uses the Packet Monitor (pktmon.exe) component included with
+supported versions of Microsoft Windows. ShadowSignal does not distribute a packet
+capture driver.

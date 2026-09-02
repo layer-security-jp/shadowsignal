@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "layersecurity-shadowsignal"
+version = "1.1.0"
+description = "宛先情報を送らずに暗号化通信形状を判定するShadowSignalクライアント"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Layer Security" }]
+dependencies = [
+  "certifi>=2024.2.2",
+  "psutil>=5.9,<8"
+]
+
+[project.scripts]
+shadowsignal = "shadowsignal.cli:main"
+
+[tool.setuptools]
+packages = ["shadowsignal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
