@@ -12,7 +12,7 @@ from shadowsignal import capture, dashboard
 from shadowsignal.cli import synthetic_flow
 from shadowsignal.destinations import final_verdict, join_local_result, prefer_attributable_flows
 from shadowsignal.models import CapturedFlow, PacketEvent
-from shadowsignal.pcapng import parse_pcapng
+from shadowsignal.pcapng import _tls_server_name, parse_pcapng
 from shadowsignal.pcap import parse_pcap
 from shadowsignal.privacy import build_session_payload, build_shape_payload
 from shadowsignal.selection import select_candidate_flows
@@ -35,6 +35,8 @@ FORBIDDEN_FIELDS = {
     "device_id",
     "flow_id",
     "known_ai_match",
+    "server_name",
+    "sni",
 }
 
 
@@ -103,6 +105,25 @@ def test_shared_cdn_flow_requires_compatible_local_process() -> None:
     assert contaminated["final_verdict"] == "attribution_ambiguous"
     assert browser["attribution_confident"] is True
     assert browser["final_verdict"] == "confirmed_ai_usage"
+
+
+def test_tls_server_name_can_attribute_generic_local_process() -> None:
+    result = join_local_result(
+        {
+            "shape_verdict": "indeterminate",
+            "confidence_bucket": "medium",
+            "sustained_stream": True,
+            "interaction_triggered": True,
+        },
+        destination_host="api.anthropic.com",
+        process_name="python",
+        parent_process="Terminal",
+        observed_server_name="api.anthropic.com",
+    )
+
+    assert result["observed_server_name"] == "api.anthropic.com"
+    assert result["attribution_confident"] is True
+    assert result["final_verdict"] == "confirmed_ai_usage"
 
 
 def test_short_browser_name_does_not_match_unrelated_process_substring() -> None:
@@ -213,6 +234,34 @@ def test_known_chat_ui_prefers_browser_owner_over_shared_cdn_process() -> None:
     assert preferred == [browser]
 
 
+def test_tls_server_name_beats_process_guess_on_shared_cdn() -> None:
+    target = CapturedFlow(
+        "tcp",
+        51001,
+        "203.0.113.10",
+        443,
+        process_name="python",
+        process_id=100,
+        server_name="chatgpt.com",
+    )
+    unrelated = CapturedFlow(
+        "tcp",
+        51002,
+        "203.0.113.10",
+        443,
+        process_name="Google Chrome",
+        process_id=200,
+        server_name="example.com",
+    )
+
+    assert prefer_attributable_flows(
+        [unrelated, target], destination_host="chatgpt.com"
+    ) == [target]
+    assert prefer_attributable_flows(
+        [unrelated], destination_host="chatgpt.com"
+    ) == []
+
+
 def test_synthetic_flow_has_no_reserved_test_ip_in_payload() -> None:
     payload = build_shape_payload(synthetic_flow())
     assert "203.0.113.10" not in str(payload)
@@ -288,9 +337,15 @@ def _pcapng_block(block_type: int, body: bytes) -> bytes:
     return struct.pack("<II", block_type, total_length) + body + struct.pack("<I", total_length)
 
 
-def _tcp_frame(source_ip: str, destination_ip: str, source_port: int, destination_port: int, size: int) -> bytes:
+def _tcp_frame_payload(
+    source_ip: str,
+    destination_ip: str,
+    source_port: int,
+    destination_port: int,
+    payload: bytes,
+) -> bytes:
     ethernet = b"\x00" * 12 + struct.pack("!H", 0x0800)
-    total_length = 20 + 20 + size
+    total_length = 20 + 20 + len(payload)
     ipv4 = struct.pack(
         "!BBHHHBBH4s4s",
         0x45,
@@ -305,7 +360,32 @@ def _tcp_frame(source_ip: str, destination_ip: str, source_port: int, destinatio
         ipaddress.ip_address(destination_ip).packed,
     )
     tcp = struct.pack("!HHIIBBHHH", source_port, destination_port, 1, 0, 0x50, 0x18, 65535, 0, 0)
-    return ethernet + ipv4 + tcp + b"x" * size
+    return ethernet + ipv4 + tcp + payload
+
+
+def _tcp_frame(source_ip: str, destination_ip: str, source_port: int, destination_port: int, size: int) -> bytes:
+    return _tcp_frame_payload(
+        source_ip, destination_ip, source_port, destination_port, b"x" * size
+    )
+
+
+def _tls_client_hello(hostname: str) -> bytes:
+    encoded = hostname.encode("ascii")
+    name = b"\x00" + struct.pack("!H", len(encoded)) + encoded
+    server_names = struct.pack("!H", len(name)) + name
+    extension = struct.pack("!HH", 0, len(server_names)) + server_names
+    hello = (
+        b"\x03\x03"
+        + b"\x00" * 32
+        + b"\x00"
+        + struct.pack("!H", 2)
+        + b"\x13\x01"
+        + b"\x01\x00"
+        + struct.pack("!H", len(extension))
+        + extension
+    )
+    handshake = b"\x01" + len(hello).to_bytes(3, "big") + hello
+    return b"\x16\x03\x01" + struct.pack("!H", len(handshake)) + handshake
 
 
 def _enhanced_packet(frame: bytes, timestamp_microseconds: int) -> bytes:
@@ -354,6 +434,19 @@ def _sample_null_pcap() -> bytes:
         captured = frame[:96]
         records.append(struct.pack("<IIII", seconds, microseconds, len(captured), len(frame)) + captured)
     return header + b"".join(records)
+
+
+def _sample_sni_pcap(hostname: str) -> bytes:
+    header = struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 1536, 101)
+    frame = _tcp_frame_payload(
+        "10.0.0.2",
+        "203.0.113.10",
+        51001,
+        443,
+        _tls_client_hello(hostname),
+    )[14:]
+    record = struct.pack("<IIII", 1, 0, len(frame), len(frame)) + frame
+    return header + record
 
 
 class _Resolver:
@@ -409,6 +502,27 @@ def test_macos_pcap_parser_supports_utun_null_link_type(tmp_path) -> None:
 
     assert len(flows) == 1
     assert [event.size for event in flows[0].events] == [32, 120]
+
+
+def test_tls_server_name_is_kept_local_and_never_added_to_api_payload(tmp_path) -> None:
+    capture_file = tmp_path / "client-hello.pcap"
+    capture_file.write_bytes(_sample_sni_pcap("chatgpt.com"))
+
+    flows = parse_pcap(capture_file, target_ips={"203.0.113.10"}, resolver=_Resolver())
+    payload = build_session_payload(flows)
+
+    assert flows[0].server_name == "chatgpt.com"
+    assert "chatgpt.com" not in str(payload)
+    assert not (set(payload) & FORBIDDEN_FIELDS)
+
+
+def test_tls_server_name_parser_rejects_truncated_and_non_tls_input() -> None:
+    client_hello = _tls_client_hello("chatgpt.com")
+
+    assert _tls_server_name(client_hello) == "chatgpt.com"
+    assert _tls_server_name(b"not tls") is None
+    assert _tls_server_name(client_hello[:40]) is None
+    assert _tls_server_name(b"\x16\x02\x00" + client_hello[3:]) is None
 
 
 def test_pktmon_filter_detection_is_language_independent() -> None:
@@ -593,7 +707,9 @@ def test_macos_tcpdump_capture_is_scoped_and_stopped(monkeypatch) -> None:
     assert process.signal == signal.SIGINT
     assert process.command[process.command.index("-i") + 1] == "en0"
     assert "-y" not in process.command
-    assert process.command[process.command.index("-s") + 1] == "96"
+    assert process.command[process.command.index("-s") + 1] == str(
+        capture.TCPDUMP_SNAPSHOT_BYTES
+    )
     assert process.command[-1] == "(host 203.0.113.10) and port 443"
 
 

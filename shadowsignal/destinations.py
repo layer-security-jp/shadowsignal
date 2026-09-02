@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .models import CapturedFlow
+
 
 @dataclass(frozen=True)
 class KnownDestination:
@@ -51,6 +53,16 @@ def lookup_destination(hostname: str) -> KnownDestination | None:
     return None
 
 
+def _server_name_matches(observed: str | None, target: str) -> bool:
+    if not observed:
+        return False
+    observed_normalized = observed.lower().rstrip(".")
+    target_normalized = target.lower().rstrip(".")
+    return observed_normalized == target_normalized or observed_normalized.endswith(
+        "." + target_normalized
+    )
+
+
 def _local_product(destination: KnownDestination | None, process_name: str | None) -> str | None:
     process = (_basename(process_name) or "").lower()
     if "claude" in process:
@@ -64,6 +76,7 @@ def _attribution_context(
     destination: KnownDestination | None,
     process_name: str | None,
     parent_process: str | None,
+    observed_server_name: str | None = None,
 ) -> tuple[bool, bool]:
     """Return (attribution_confident, trusted_agent_process)."""
     if destination is None:
@@ -71,6 +84,19 @@ def _attribution_context(
     process = " ".join(
         part.lower() for part in (process_name or "", parent_process or "") if part
     )
+    if observed_server_name:
+        if not _server_name_matches(observed_server_name, destination.suffix):
+            return (False, False)
+        trusted_agent = (
+            destination.vendor == "Anthropic" and "claude" in process
+        ) or (
+            destination.vendor == "OpenAI" and "codex" in process
+        ) or (
+            destination.vendor == "Google" and "gemini" in process
+        ) or (
+            destination.vendor == "DeepSeek" and "deepseek" in process
+        )
+        return (True, trusted_agent)
     if destination.category == "chat_ui":
         names = {
             (_basename(part) or "").lower()
@@ -92,23 +118,36 @@ def _attribution_context(
     return (trusted_agent, trusted_agent)
 
 
-def prefer_attributable_flows(flows: list, *, destination_host: str) -> list:
+def prefer_attributable_flows(
+    flows: list[CapturedFlow], *, destination_host: str
+) -> list[CapturedFlow]:
     """Prefer owners compatible with the locally known destination.
 
     If process attribution is unavailable, retain the original flows so the
     caller can still report access or an inconclusive shape result.
     """
+    exact = [
+        flow
+        for flow in flows
+        if _server_name_matches(getattr(flow, "server_name", None), destination_host)
+    ]
+    if exact:
+        return exact
+    unknown = [flow for flow in flows if not getattr(flow, "server_name", None)]
+    if not unknown:
+        return []
+
     destination = lookup_destination(destination_host)
     attributable = [
         flow
-        for flow in flows
+        for flow in unknown
         if _attribution_context(
             destination,
             getattr(flow, "process_name", None),
             getattr(flow, "parent_process", None),
         )[0]
     ]
-    return attributable or flows
+    return attributable or unknown
 
 
 def final_verdict(
@@ -144,11 +183,15 @@ def final_verdict(
 
 
 def describe_local_context(
-    *, destination_host: str, process_name: str | None, parent_process: str | None
+    *,
+    destination_host: str,
+    process_name: str | None,
+    parent_process: str | None,
+    observed_server_name: str | None = None,
 ) -> dict:
     destination = lookup_destination(destination_host)
     attribution_confident, trusted_agent_process = _attribution_context(
-        destination, process_name, parent_process
+        destination, process_name, parent_process, observed_server_name
     )
     return {
         "known_ai_destination": destination is not None,
@@ -157,6 +200,7 @@ def describe_local_context(
         "product": _local_product(destination, process_name),
         "process_name": _basename(process_name),
         "parent_process": _basename(parent_process),
+        "observed_server_name": observed_server_name,
         "attribution_confident": attribution_confident,
         "trusted_agent_process": trusted_agent_process,
     }
@@ -168,11 +212,13 @@ def join_local_result(
     destination_host: str,
     process_name: str | None,
     parent_process: str | None,
+    observed_server_name: str | None = None,
 ) -> dict:
     context = describe_local_context(
         destination_host=destination_host,
         process_name=process_name,
         parent_process=parent_process,
+        observed_server_name=observed_server_name,
     )
     shape_verdict = str(api_result.get("shape_verdict", "indeterminate"))
     sustained_stream = api_result.get("sustained_stream") is True

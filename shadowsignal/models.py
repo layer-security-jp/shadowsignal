@@ -29,6 +29,7 @@ class CapturedFlow:
     process_name: str | None = None
     parent_process: str | None = None
     process_id: int | None = None
+    server_name: str | None = None
 
     @property
     def inbound_count(self) -> int:

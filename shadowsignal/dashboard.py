@@ -61,6 +61,7 @@ def _capture_request(data: dict, *, api_url: str) -> dict:
             destination_host=target_host,
             process_name=context_flow.process_name,
             parent_process=context_flow.parent_process,
+            observed_server_name=context_flow.server_name,
         )
         item = {"api_request": payload, "local_context": local_context}
         if not dry_run:
@@ -71,6 +72,7 @@ def _capture_request(data: dict, *, api_url: str) -> dict:
                 destination_host=target_host,
                 process_name=context_flow.process_name,
                 parent_process=context_flow.parent_process,
+                observed_server_name=context_flow.server_name,
             )
         items.append(item)
     return {
@@ -78,7 +80,7 @@ def _capture_request(data: dict, *, api_url: str) -> dict:
         "captured_flows": len(flows),
         "items": items,
         "message": (
-            "対象フローを取得できませんでした。計測開始後にClaudeへプロンプトを送信してください。"
+            "対象フローを取得できませんでした。計測開始後に対象の生成AIサービスを利用してください。"
             if not items
             else None
         ),

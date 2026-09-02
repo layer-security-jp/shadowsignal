@@ -41,6 +41,73 @@ class _Packet:
     source_port: int
     destination_port: int
     payload_size: int
+    server_name: str | None = None
+
+
+def _tls_server_name(payload: bytes) -> str | None:
+    """Extract plaintext SNI from a complete TLS ClientHello record."""
+    if (
+        len(payload) < 9
+        or payload[0] != 0x16
+        or payload[1] != 0x03
+        or payload[2] > 0x04
+    ):
+        return None
+    record_length = struct.unpack_from("!H", payload, 3)[0]
+    record = payload[5 : min(len(payload), 5 + record_length)]
+    if len(record) < 4 or record[0] != 0x01:
+        return None
+    handshake_length = int.from_bytes(record[1:4], "big")
+    hello = record[4 : min(len(record), 4 + handshake_length)]
+    if len(hello) < 35:
+        return None
+
+    offset = 34  # legacy_version + random
+    session_id_length = hello[offset]
+    offset += 1 + session_id_length
+    if offset + 2 > len(hello):
+        return None
+    cipher_suites_length = struct.unpack_from("!H", hello, offset)[0]
+    offset += 2 + cipher_suites_length
+    if offset + 1 > len(hello):
+        return None
+    compression_methods_length = hello[offset]
+    offset += 1 + compression_methods_length
+    if offset + 2 > len(hello):
+        return None
+    extensions_length = struct.unpack_from("!H", hello, offset)[0]
+    offset += 2
+    extensions_end = min(len(hello), offset + extensions_length)
+
+    while offset + 4 <= extensions_end:
+        extension_type, extension_length = struct.unpack_from("!HH", hello, offset)
+        offset += 4
+        extension_end = offset + extension_length
+        if extension_end > extensions_end:
+            return None
+        if extension_type == 0 and extension_length >= 5:
+            names_end = offset + 2 + struct.unpack_from("!H", hello, offset)[0]
+            cursor = offset + 2
+            names_end = min(names_end, extension_end)
+            while cursor + 3 <= names_end:
+                name_type = hello[cursor]
+                name_length = struct.unpack_from("!H", hello, cursor + 1)[0]
+                cursor += 3
+                if cursor + name_length > names_end:
+                    return None
+                if name_type == 0:
+                    try:
+                        hostname = hello[cursor : cursor + name_length].decode("ascii").lower()
+                    except UnicodeDecodeError:
+                        return None
+                    hostname = hostname.rstrip(".")
+                    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-.")
+                    if 1 <= len(hostname) <= 253 and set(hostname) <= allowed:
+                        return hostname
+                    return None
+                cursor += name_length
+        offset = extension_end
+    return None
 
 
 def _options_timestamp_resolution(body: bytes, endian: str) -> float:
@@ -137,12 +204,16 @@ def _transport_packet(frame: bytes, *, link_type: int, timestamp: float) -> _Pac
             return None
         payload_size = ip_payload_size - tcp_header_size
         transport = "tcp"
+        payload_offset = transport_offset + tcp_header_size
+        captured_end = min(len(frame), transport_offset + max(0, ip_payload_size))
+        server_name = _tls_server_name(frame[payload_offset:captured_end])
     elif protocol == 17:
         if len(frame) < transport_offset + 8:
             return None
         source_port, destination_port = struct.unpack_from("!HH", frame, transport_offset)
         payload_size = ip_payload_size - 8
         transport = "quic"
+        server_name = None
     else:
         return None
 
@@ -156,6 +227,7 @@ def _transport_packet(frame: bytes, *, link_type: int, timestamp: float) -> _Pac
         source_port=source_port,
         destination_port=destination_port,
         payload_size=payload_size,
+        server_name=server_name,
     )
 
 
@@ -255,6 +327,8 @@ def _packets_to_flows(
         if flow is None:
             flow = CapturedFlow(packet.transport, local_port, remote_ip, 443)
             flows[key] = flow
+        if packet.server_name and flow.server_name is None:
+            flow.server_name = packet.server_name
         flow.events.append(PacketEvent(offset_ms, direction, packet.payload_size))
 
     for flow in flows.values():

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "layersecurity-shadowsignal"
-version = "1.1.2"
+version = "1.2.0"
 description = "宛先情報を送らずに暗号化通信形状を判定するShadowSignalクライアント"
 readme = "README.md"
 requires-python = ">=3.11"

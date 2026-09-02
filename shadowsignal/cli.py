@@ -76,7 +76,10 @@ def run_capture(args: argparse.Namespace) -> int:
     flows = prefer_attributable_flows(flows, destination_host=args.target_host)
     flows = select_candidate_flows(flows, limit=args.max_flows)
     if not flows:
-        print("対象フローを取得できませんでした。計測開始後にClaudeへプロンプトを送信してください。", file=sys.stderr)
+        print(
+            "対象フローを取得できませんでした。計測開始後に対象の生成AIサービスを利用してください。",
+            file=sys.stderr,
+        )
         return 2
 
     payload = build_session_payload(flows)
@@ -90,6 +93,7 @@ def run_capture(args: argparse.Namespace) -> int:
                 destination_host=args.target_host,
                 process_name=context_flow.process_name,
                 parent_process=context_flow.parent_process,
+                observed_server_name=context_flow.server_name,
             )
         )
     return 0
