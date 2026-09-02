@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .api import ShadowSignalAPIError, analyze
 from .capture import CaptureError, capture_flows
-from .destinations import describe_local_context, join_local_result
+from .destinations import describe_local_context, join_local_result, prefer_attributable_flows
 from .privacy import build_session_payload
 from .selection import select_candidate_flows
 
@@ -50,6 +50,7 @@ def _capture_request(data: dict, *, api_url: str) -> dict:
             if process_filter in (flow.process_name or "").lower()
             or process_filter in (flow.parent_process or "").lower()
         ]
+    flows = prefer_attributable_flows(flows, destination_host=target_host)
     flows = select_candidate_flows(flows, limit=max_flows)
 
     items = []
@@ -160,7 +161,7 @@ const button = document.getElementById("start");
 const statusBox = document.getElementById("status");
 const results = document.getElementById("results");
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const verdictLabel = {confirmed_ai_usage:"生成AIの利用を検知",known_ai_access:"生成AIサービスへの接続",known_ai_background:"バックグラウンド通信",suspected_shadow_ai:"生成AI利用の可能性",unclassified:"判定保留",not_detected:"検知なし",unknown:"判定不能"};
+const verdictLabel = {confirmed_ai_usage:"生成AIの利用を検知",attribution_ambiguous:"通信の帰属を確認できません",known_ai_access:"生成AIサービスへの接続",known_ai_background:"バックグラウンド通信",suspected_shadow_ai:"生成AI利用の可能性",unclassified:"判定保留",not_detected:"検知なし",unknown:"判定不能"};
 form.addEventListener("submit", async (event) => {
   event.preventDefault(); button.disabled = true; results.innerHTML = '<div class="empty">対象通信を計測しています…</div>';
   const values = Object.fromEntries(new FormData(form));

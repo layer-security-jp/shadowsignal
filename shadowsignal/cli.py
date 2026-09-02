@@ -9,7 +9,7 @@ import sys
 from .api import DEFAULT_API, ShadowSignalAPIError, analyze
 from .capture import CaptureError, capture_flows
 from .dashboard import serve_dashboard
-from .destinations import join_local_result
+from .destinations import join_local_result, prefer_attributable_flows
 from .models import CapturedFlow, PacketEvent
 from .privacy import build_session_payload, build_shape_payload
 from .selection import select_candidate_flows
@@ -32,6 +32,9 @@ def print_result(result: dict) -> None:
         "final_verdict": result.get("final_verdict"),
         "shape_verdict": result.get("shape_verdict"),
         "confidence": result.get("confidence"),
+        "evidence_class": result.get("evidence_class"),
+        "interaction_triggered": result.get("interaction_triggered"),
+        "attribution_confident": result.get("attribution_confident"),
         "known_ai_destination": result.get("known_ai_destination"),
         "destination_host": result.get("destination_host"),
         "vendor": result.get("vendor"),
@@ -70,6 +73,7 @@ def run_capture(args: argparse.Namespace) -> int:
             if process_filter in (flow.process_name or "").lower()
             or process_filter in (flow.parent_process or "").lower()
         ]
+    flows = prefer_attributable_flows(flows, destination_host=args.target_host)
     flows = select_candidate_flows(flows, limit=args.max_flows)
     if not flows:
         print("対象フローを取得できませんでした。計測開始後にClaudeへプロンプトを送信してください。", file=sys.stderr)

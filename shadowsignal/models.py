@@ -28,6 +28,7 @@ class CapturedFlow:
     events: list[PacketEvent] = field(default_factory=list)
     process_name: str | None = None
     parent_process: str | None = None
+    process_id: int | None = None
 
     @property
     def inbound_count(self) -> int:

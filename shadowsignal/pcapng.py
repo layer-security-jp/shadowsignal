@@ -23,7 +23,7 @@ LINKTYPE_IPV6 = 229
 
 
 class ProcessLookup(Protocol):
-    def lookup(self, local_port: int) -> tuple[str | None, str | None]: ...
+    def lookup(self, local_port: int) -> tuple[str | None, str | None, int | None]: ...
 
 
 @dataclass(frozen=True)
@@ -258,9 +258,10 @@ def _packets_to_flows(
         flow.events.append(PacketEvent(offset_ms, direction, packet.payload_size))
 
     for flow in flows.values():
-        process_name, parent_process = resolver.lookup(flow.local_port)
+        process_name, parent_process, process_id = resolver.lookup(flow.local_port)
         flow.process_name = process_name
         flow.parent_process = parent_process
+        flow.process_id = process_id
 
     return sorted(flows.values(), key=lambda flow: (flow.inbound_count, len(flow.events)), reverse=True)
 

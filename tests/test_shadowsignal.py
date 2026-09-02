@@ -10,7 +10,7 @@ import pytest
 
 from shadowsignal import capture, dashboard
 from shadowsignal.cli import synthetic_flow
-from shadowsignal.destinations import final_verdict, join_local_result
+from shadowsignal.destinations import final_verdict, join_local_result, prefer_attributable_flows
 from shadowsignal.models import CapturedFlow, PacketEvent
 from shadowsignal.pcapng import parse_pcapng
 from shadowsignal.pcap import parse_pcap
@@ -77,6 +77,51 @@ def test_process_and_destination_stay_in_local_join_only() -> None:
     assert "alice" not in str(payload)
 
 
+def test_shared_cdn_flow_requires_compatible_local_process() -> None:
+    api_result = {
+        "observation_id": "obs_0123456789abcdef0123456789abcdef",
+        "shape_verdict": "indeterminate",
+        "confidence_bucket": "medium",
+        "sustained_stream": True,
+        "interaction_triggered": True,
+    }
+
+    contaminated = join_local_result(
+        api_result,
+        destination_host="chatgpt.com",
+        process_name="codex",
+        parent_process="ChatGPT",
+    )
+    browser = join_local_result(
+        api_result,
+        destination_host="chatgpt.com",
+        process_name="Google Chrome Helper",
+        parent_process="Google Chrome",
+    )
+
+    assert contaminated["attribution_confident"] is False
+    assert contaminated["final_verdict"] == "attribution_ambiguous"
+    assert browser["attribution_confident"] is True
+    assert browser["final_verdict"] == "confirmed_ai_usage"
+
+
+def test_short_browser_name_does_not_match_unrelated_process_substring() -> None:
+    result = join_local_result(
+        {
+            "shape_verdict": "indeterminate",
+            "confidence_bucket": "medium",
+            "sustained_stream": True,
+            "interaction_triggered": True,
+        },
+        destination_host="chatgpt.com",
+        process_name="SearchHost.exe",
+        parent_process="explorer.exe",
+    )
+
+    assert result["attribution_confident"] is False
+    assert result["final_verdict"] == "attribution_ambiguous"
+
+
 def test_events_are_sorted_and_limited() -> None:
     flow = CapturedFlow("tcp", 1, "203.0.113.10", 443)
     flow.events = [PacketEvent(offset, "in", 100) for offset in range(700, -1, -1)]
@@ -87,6 +132,28 @@ def test_events_are_sorted_and_limited() -> None:
     assert offsets[-1] == 700
     assert all(offset % 10 == 0 for offset in offsets)
     assert all(event["size"] == 128 for event in payload["events"])
+
+
+def test_event_limit_preserves_sparse_outbound_direction() -> None:
+    flow = CapturedFlow("tcp", 1, "203.0.113.10", 443)
+    flow.events = [PacketEvent(index * 10, "in", 100) for index in range(900)]
+    flow.events.extend(PacketEvent(index * 400, "out", 320) for index in range(20))
+
+    payload = build_shape_payload(flow)
+
+    assert len(payload["events"]) == 512
+    assert sum(event["direction"] == "out" for event in payload["events"]) == 20
+
+
+def test_event_limit_uses_full_budget_for_outbound_dominant_flow() -> None:
+    flow = CapturedFlow("tcp", 1, "203.0.113.10", 443)
+    flow.events = [PacketEvent(index * 10, "out", 100) for index in range(900)]
+    flow.events.extend(PacketEvent(index * 400, "in", 320) for index in range(20))
+
+    payload = build_shape_payload(flow)
+
+    assert len(payload["events"]) == 512
+    assert sum(event["direction"] == "in" for event in payload["events"]) == 20
 
 
 def test_session_payload_combines_concurrent_flows_without_context() -> None:
@@ -118,29 +185,100 @@ def test_interactive_flow_is_selected_before_short_burst() -> None:
     assert select_candidate_flows([burst, interactive], limit=1) == [interactive]
 
 
+def test_candidate_flows_never_mix_process_owners() -> None:
+    browser = CapturedFlow("tcp", 51001, "203.0.113.10", 443, process_id=100)
+    browser.events = [PacketEvent(0, "out", 600)]
+    browser.events.extend(PacketEvent(index * 400, "in", 192) for index in range(1, 14))
+    unrelated = CapturedFlow("tcp", 51002, "203.0.113.10", 443, process_id=200)
+    unrelated.events = [PacketEvent(index * 100, "in", 192) for index in range(100)]
+
+    selected = select_candidate_flows([unrelated, browser], limit=3)
+
+    assert selected == [browser]
+    assert {flow.process_id for flow in selected} == {100}
+
+
+def test_known_chat_ui_prefers_browser_owner_over_shared_cdn_process() -> None:
+    browser = CapturedFlow(
+        "tcp", 51001, "203.0.113.10", 443, process_name="Google Chrome", process_id=100
+    )
+    browser.events = [PacketEvent(0, "out", 600), PacketEvent(500, "in", 1200)]
+    codex = CapturedFlow(
+        "tcp", 51002, "203.0.113.10", 443, process_name="codex", process_id=200
+    )
+    codex.events = [PacketEvent(index * 100, "in", 192) for index in range(100)]
+
+    preferred = prefer_attributable_flows([codex, browser], destination_host="chatgpt.com")
+
+    assert preferred == [browser]
+
+
 def test_synthetic_flow_has_no_reserved_test_ip_in_payload() -> None:
     payload = build_shape_payload(synthetic_flow())
     assert "203.0.113.10" not in str(payload)
 
 
 def test_split_decision_matrix() -> None:
-    assert final_verdict(known_ai=True, shape_verdict="likely_llm") == "confirmed_ai_usage"
-    assert final_verdict(known_ai=True, shape_verdict="indeterminate") == "known_ai_access"
-    assert final_verdict(known_ai=True, shape_verdict="unlikely_llm") == "known_ai_background"
-    assert final_verdict(known_ai=False, shape_verdict="likely_llm") == "suspected_shadow_ai"
+    assert final_verdict(known_ai=True, shape_verdict="likely_llm") == "attribution_ambiguous"
+    assert final_verdict(known_ai=True, shape_verdict="indeterminate") == "attribution_ambiguous"
+    assert final_verdict(known_ai=True, shape_verdict="unlikely_llm") == "attribution_ambiguous"
+    assert final_verdict(known_ai=False, shape_verdict="likely_llm") == "unclassified"
     assert final_verdict(known_ai=False, shape_verdict="indeterminate") == "unclassified"
     assert final_verdict(known_ai=False, shape_verdict="unlikely_llm") == "not_detected"
     assert (
         final_verdict(
+            known_ai=True,
+            shape_verdict="indeterminate",
+            attribution_confident=True,
+        )
+        == "known_ai_access"
+    )
+    assert (
+        final_verdict(
+            known_ai=True,
+            shape_verdict="unlikely_llm",
+            attribution_confident=True,
+        )
+        == "known_ai_background"
+    )
+    assert (
+        final_verdict(
             known_ai=True, shape_verdict="indeterminate", sustained_stream=True
         )
-        == "confirmed_ai_usage"
+        == "attribution_ambiguous"
     )
     assert (
         final_verdict(
             known_ai=False, shape_verdict="indeterminate", sustained_stream=True
         )
         == "unclassified"
+    )
+    assert (
+        final_verdict(
+            known_ai=True,
+            shape_verdict="indeterminate",
+            sustained_stream=True,
+            interaction_triggered=True,
+            attribution_confident=True,
+        )
+        == "confirmed_ai_usage"
+    )
+    assert (
+        final_verdict(
+            known_ai=True,
+            shape_verdict="indeterminate",
+            sustained_stream=True,
+            trusted_agent_process=True,
+        )
+        == "confirmed_ai_usage"
+    )
+    assert (
+        final_verdict(
+            known_ai=False,
+            shape_verdict="likely_llm",
+            interaction_triggered=True,
+        )
+        == "suspected_shadow_ai"
     )
 
 
@@ -219,9 +357,9 @@ def _sample_null_pcap() -> bytes:
 
 
 class _Resolver:
-    def lookup(self, local_port: int) -> tuple[str | None, str | None]:
+    def lookup(self, local_port: int) -> tuple[str | None, str | None, int | None]:
         assert local_port == 51001
-        return "claude.exe", "Code.exe"
+        return "claude.exe", "Code.exe", 4321
 
 
 def test_pktmon_pcapng_parser_extracts_only_flow_metadata(tmp_path) -> None:
@@ -233,6 +371,7 @@ def test_pktmon_pcapng_parser_extracts_only_flow_metadata(tmp_path) -> None:
     assert len(flows) == 1
     assert flows[0].process_name == "claude.exe"
     assert flows[0].parent_process == "Code.exe"
+    assert flows[0].process_id == 4321
     assert [event.as_dict() for event in flows[0].events] == [
         {"offset_ms": 0, "direction": "out", "size": 32},
         {"offset_ms": 500, "direction": "in", "size": 120},
@@ -507,7 +646,8 @@ def test_dashboard_filters_flows_and_returns_request_and_result(monkeypatch) -> 
             "confidence_bucket": "high",
             "evidence_class": "streaming_cadence",
             "sustained_stream": True,
-            "model_version": "shadowsignal-shape-2026-09-r2",
+            "interaction_triggered": True,
+            "model_version": "shadowsignal-shape-2026-09-r3",
             "api_url": api_url,
         },
     )
