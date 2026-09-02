@@ -1,7 +1,8 @@
 # ShadowSignal
 
-ShadowSignalは、暗号化通信のサイズ・タイミング・方向から、生成AIサービスの利用兆候を
-検知する技術デモです。通信内容は復号しません。
+ShadowSignalは、通信内容を復号・送信せず、暗号化通信のサイズ・タイミング・方向から
+生成AIサービスの利用兆候を確認する技術デモです。macOS上のClaude Codeで実測確認して
+います。あらゆるIDEや生成AIサービスの検知を保証するものではありません。
 
 - API: <https://shadowsignal-api.layersecurity.jp>
 - API仕様: <https://shadowsignal-api.layersecurity.jp/docs>
@@ -66,9 +67,8 @@ export SHADOWSIGNAL_API_KEY="別経路で提供されたAPIキー"
 sudo -E .venv/bin/shadowsignal dashboard
 ```
 
-起動後、ブラウザで45秒の計測を開始し、その間にVS CodeのClaude拡張機能またはブラウザの
-生成AIサービスを利用します。ダッシュボードには、APIへ送った情報と端末内だけで扱う情報が
-分けて表示されます。
+起動後、ブラウザで45秒の計測を開始し、その間に対象の生成AIサービスを利用します。
+ダッシュボードには、APIへ送った情報と端末内だけで扱う情報が分けて表示されます。
 
 ## CLI
 

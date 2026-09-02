@@ -132,7 +132,7 @@ _HTML = r"""<!doctype html>
 <body>
 <main>
   <header>
-    <div><div class="eyebrow">Encrypted-flow intelligence</div><h1>ShadowSignal Demo</h1><div class="subtitle">暗号化された通信のメタデータだけでLLM利用を判定</div></div>
+    <div><div class="eyebrow">Encrypted-flow intelligence</div><h1>ShadowSignal Demo</h1><div class="subtitle">通信内容を扱わず、生成AI利用の兆候を可視化</div></div>
     <div class="privacy">✓ 宛先・IP・プロセス・生パケットはAPIへ送信しません<br>✓ この端末内で宛先と判定結果を結合します</div>
   </header>
   <div class="grid">
@@ -147,7 +147,7 @@ _HTML = r"""<!doctype html>
         <label class="check"><input name="dry_run" type="checkbox"> APIへ送らずメタデータだけ確認</label>
         <button id="start" type="submit">キャプチャーを開始</button>
         <div class="status" id="status"></div>
-        <p class="note">開始後、VS CodeのClaude拡張でプロンプトを1件送信してください。</p>
+        <p class="note">開始後、対象の生成AIサービスでプロンプトを1件送信してください。</p>
       </form>
     </section>
     <section class="panel results" id="results"><div class="empty">判定結果がここに表示されます</div></section>
