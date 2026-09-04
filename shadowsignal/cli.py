@@ -17,12 +17,13 @@ from .selection import select_candidate_flows
 
 def synthetic_flow() -> CapturedFlow:
     flow = CapturedFlow("tcp", 51001, "203.0.113.10", 443, process_name="claude.exe", parent_process="Code.exe")
-    flow.events.append(PacketEvent(0, "out", 320))
-    gaps = [420, 760, 510, 930, 610, 470, 850, 560, 990, 650, 440, 780, 530, 900, 620, 480, 820, 570]
+    flow.events.extend(PacketEvent(index * 3, "out", 1_500) for index in range(22))
+    gaps = [0, 420, 760, 510, 930, 610, 470, 850, 560, 990, 650, 440, 780, 630]
+    sizes = [120, 140, 160, 180, 130, 150, 170, 190, 110, 200, 155, 1_400, 1_500, 1_300]
     offset = 0
-    for index, gap in enumerate(gaps):
+    for gap, size in zip(gaps, sizes):
         offset += gap
-        flow.events.append(PacketEvent(offset, "in", 120 + (index % 3) * 9))
+        flow.events.append(PacketEvent(offset, "in", size))
     return flow
 
 
