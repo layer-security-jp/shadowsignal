@@ -91,19 +91,19 @@
         <div class="box"><strong>対象通信を取得</strong><span>OS標準機能で端末内処理</span></div>
       </div>
       <div class="split">
-        <div class="split-box send"><strong>API送信用に変換</strong><p>相対時刻・方向・サイズ</p></div>
+        <div class="split-box send"><strong>API送信用に集約</strong><p>時間・サイズ・頻度の統計</p></div>
         <div class="split-box stay"><strong>端末内に保持</strong><p>宛先・IP・プロセス・絶対時刻</p></div>
       </div>
-      <div class="join">APIの形状判定 ＋ 端末内の宛先情報 → 最終表示</div>
+      <div class="join">APIの統計判定 ＋ 端末内の宛先情報 → 最終表示</div>
     </div>
     <div class="transit">
-      <div class="transfer">通信形状<br><b>→</b></div>
+      <div class="transfer">集約統計<br><b>→</b></div>
       <div class="transfer return">判定結果<br><b>→</b></div>
     </div>
     <div class="api">
       <div class="zone">Layer Security側</div>
       <h2>ShadowSignal API</h2>
-      <div class="api-card"><strong>通信形状を判定</strong><p>宛先やプロセスは受信しない</p></div>
+      <div class="api-card"><strong>集約統計を判定</strong><p>宛先やプロセスは受信しない</p></div>
       <div class="api-card"><strong>判定結果を返す</strong><p>AIらしい ／ 判定保留 ／ AIらしくない</p></div>
     </div>
   </section>

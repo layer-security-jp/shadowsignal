@@ -48,7 +48,7 @@
 <body>
 <main class="canvas" role="img" aria-label="ShadowSignalが対象端末内に残す情報とAPIへ送る情報を比較した図">
   <div class="brand">SHADOWSIGNAL DATA BOUNDARY</div>
-  <h1>APIへ送るのは、量子化した通信形状だけ</h1>
+  <h1>APIへ送るのは、量子化した集約統計だけ</h1>
   <section class="panels">
     <div class="panel local">
       <div class="tag">対象端末内に残る</div>
@@ -63,16 +63,16 @@
     <div class="divider"><div class="line"></div><strong>送信しない</strong><div class="line"></div></div>
     <div class="panel remote">
       <div class="tag">APIへ送る</div>
-      <h2>通信形状データ</h2>
+      <h2>フロー集約統計</h2>
       <ul>
         <li>ランダムな観測ID</li>
-        <li>相対時刻（10ms単位）</li>
-        <li>方向（in ／ out）</li>
-        <li>サイズ（32B単位）</li>
+        <li>パケット数・通信時間</li>
+        <li>サイズ・到着間隔の分布</li>
+        <li>転送レート・送受信比率</li>
       </ul>
     </div>
   </section>
-  <div class="note">APIは形状判定と同じ観測IDだけを返し、対象端末が宛先情報と結合します。</div>
+  <div class="note">APIは判定結果と同じ観測IDだけを返し、対象端末が宛先情報と結合します。</div>
 </main>
 </body>
 </html>

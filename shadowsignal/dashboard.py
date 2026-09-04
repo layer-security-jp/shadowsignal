@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .api import ShadowSignalAPIError, analyze
 from .capture import CaptureError, capture_flows
 from .destinations import describe_local_context, join_local_result, prefer_attributable_flows
-from .privacy import build_session_payload
+from .privacy import build_flow_stats_payload
 from .selection import select_candidate_flows
 
 
@@ -54,9 +54,11 @@ def _capture_request(data: dict, *, api_url: str) -> dict:
     flows = select_candidate_flows(flows, limit=max_flows)
 
     items = []
-    if flows:
-        payload = build_session_payload(flows)
-        context_flow = next((flow for flow in flows if flow.process_name), flows[0])
+    for context_flow in flows:
+        try:
+            payload = build_flow_stats_payload(context_flow)
+        except ValueError:
+            continue
         local_context = describe_local_context(
             destination_host=target_host,
             process_name=context_flow.process_name,
@@ -181,9 +183,9 @@ form.addEventListener("submit", async (event) => {
       const api = item.api_result || {};
       const verdict = r.final_verdict || "unknown";
       const title = body.dry_run ? "送信前確認" : (verdictLabel[verdict] || verdict);
-      const eventCount = (item.api_request.flows || []).reduce((sum, flow) => sum + (flow.events?.length || 0), 0);
+      const eventCount = item.api_request.inbound_packets || 0;
       return `<article class="result-card"><span class="badge">SESSION ${index+1}</span><h2>${esc(title)}</h2>
-        <div class="facts"><div class="fact"><span>通信形状</span>${esc(api.verdict || api.shape_verdict || (body.dry_run ? "未送信" : null))}</div><div class="fact"><span>信頼度</span>${esc(api.confidence || api.confidence_bucket)}</div><div class="fact"><span>イベント数</span>${eventCount}</div></div>
+        <div class="facts"><div class="fact"><span>通信形状</span>${esc(api.verdict || api.shape_verdict || (body.dry_run ? "未送信" : null))}</div><div class="fact"><span>信頼度</span>${esc(api.confidence || api.confidence_bucket)}</div><div class="fact"><span>受信イベント</span>${eventCount}</div></div>
         <div>${esc(item.local_context.vendor)} · ${esc(item.local_context.product)} · ${esc(item.local_context.destination_host)}</div>
         <details><summary>APIへ送信した通信形状データ</summary><pre>${esc(JSON.stringify(item.api_request,null,2))}</pre></details>
         ${item.api_result ? `<details><summary>APIレスポンス</summary><pre>${esc(JSON.stringify(item.api_result,null,2))}</pre></details>` : ""}

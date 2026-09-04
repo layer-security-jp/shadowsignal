@@ -225,10 +225,14 @@ def join_local_result(
     )
     interaction_count = int(api_result.get("interaction_count", 0) or 0)
     sustained_stream = (
-        api_result.get("sustained_stream") is True or interaction_count > 0
+        api_result.get("sustained_stream") is True
+        or interaction_count > 0
+        or api_result.get("evidence_class") == "aggregate_cadence"
     )
     interaction_triggered = (
-        api_result.get("interaction_triggered") is True or interaction_count > 0
+        api_result.get("interaction_triggered") is True
+        or interaction_count > 0
+        or api_result.get("evidence_class") == "aggregate_cadence"
     )
     return {
         "observation_id": api_result.get("observation_id"),

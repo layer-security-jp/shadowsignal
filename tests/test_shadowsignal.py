@@ -18,7 +18,11 @@ from shadowsignal.destinations import final_verdict, join_local_result, prefer_a
 from shadowsignal.models import CapturedFlow, PacketEvent
 from shadowsignal.pcapng import _tls_server_name, parse_pcapng
 from shadowsignal.pcap import parse_pcap
-from shadowsignal.privacy import build_session_payload, build_shape_payload
+from shadowsignal.privacy import (
+    build_flow_stats_payload,
+    build_session_payload,
+    build_shape_payload,
+)
 from shadowsignal.selection import select_candidate_flows
 
 
@@ -91,8 +95,77 @@ def test_v2_payload_is_sent_to_v2_endpoint(monkeypatch) -> None:
     )
 
     assert requested_urls == ["https://example.invalid/v2/shape-analyses"]
-    assert requests[0].get_header("User-agent") == "layersecurity-shadowsignal/1.4.1"
+    assert requests[0].get_header("User-agent") == "layersecurity-shadowsignal/1.5.0"
     assert result["verdict"] == "indeterminate"
+
+
+def test_aggregate_payload_is_sent_to_flow_stats_endpoint(monkeypatch) -> None:
+    requested_urls = []
+    payload = build_flow_stats_payload(
+        synthetic_flow(), observation_id="obs_0123456789abcdef0123456789abcdef"
+    )
+
+    def fake_open(request, **_kwargs):
+        requested_urls.append(request.full_url)
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "schema_version": "shadowsignal-flow-stats-result/v2",
+                    "observation_id": payload["observation_id"],
+                    "verdict": "likely_llm",
+                    "confidence": "medium",
+                    "evidence_class": "aggregate_cadence",
+                    "model_version": "shadowsignal-flow-stats-2026-09-a1",
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr(api, "_open_request", fake_open)
+    result = api.analyze(
+        payload, api_url="https://example.invalid", api_key="test-key"
+    )
+
+    assert requested_urls == ["https://example.invalid/v2/flow-stat-analyses"]
+    assert result["verdict"] == "likely_llm"
+
+
+def test_aggregate_payload_contains_only_quantized_statistics() -> None:
+    payload = build_flow_stats_payload(
+        synthetic_flow(), observation_id="obs_0123456789abcdef0123456789abcdef"
+    )
+
+    assert set(payload) == {
+        "schema_version",
+        "observation_id",
+        "transport",
+        "inbound_packets",
+        "duration_ms",
+        "median_inbound_size",
+        "small_packet_ratio_milli",
+        "size_cv_milli",
+        "iat_cv_milli",
+        "median_iat_ms",
+        "density_milli",
+        "kib_per_second_milli",
+        "inbound_outbound_ratio_milli",
+        "dribble_run",
+    }
+    assert payload["schema_version"] == "shadowsignal-flow-stats/v2"
+    assert payload["duration_ms"] % 100 == 0
+    assert payload["median_inbound_size"] % 32 == 0
+    assert payload["median_iat_ms"] % 10 == 0
+    serialized = json.dumps(payload)
+    for forbidden in (
+        "203.0.113.10",
+        "claude.exe",
+        "Code.exe",
+        "remote_ip",
+        "process_name",
+        "offset_ms",
+        "direction",
+        '"size"',
+    ):
+        assert forbidden not in serialized
 
 
 def test_api_client_rejects_mismatched_observation_id(monkeypatch) -> None:

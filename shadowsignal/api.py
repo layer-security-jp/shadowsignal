@@ -58,14 +58,16 @@ def _open_request(request: urllib.request.Request, *, context: ssl.SSLContext, t
     return opener.open(request, timeout=timeout)
 
 
-def _validated_response(raw: bytes, *, observation_id: str) -> dict:
+def _validated_response(
+    raw: bytes, *, observation_id: str, expected_schema: str
+) -> dict:
     try:
         value = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ShadowSignalAPIError("ShadowSignal API returned invalid JSON") from exc
     if not isinstance(value, dict):
         raise ShadowSignalAPIError("ShadowSignal API returned an invalid response object")
-    if value.get("schema_version") != "shadowsignal-shape-result/v2":
+    if value.get("schema_version") != expected_schema:
         raise ShadowSignalAPIError("ShadowSignal API returned an unsupported result schema")
     if value.get("observation_id") != observation_id:
         raise ShadowSignalAPIError("ShadowSignal API returned a mismatched observation_id")
@@ -76,9 +78,10 @@ def _validated_response(raw: bytes, *, observation_id: str) -> dict:
     for field in ("evidence_class", "model_version"):
         if not isinstance(value.get(field), str) or not value[field]:
             raise ShadowSignalAPIError(f"ShadowSignal API returned an invalid {field}")
-    for field in ("interaction_count", "analyzed_flows"):
-        if not isinstance(value.get(field), int) or isinstance(value.get(field), bool) or value[field] < 0:
-            raise ShadowSignalAPIError(f"ShadowSignal API returned an invalid {field}")
+    if expected_schema == "shadowsignal-shape-result/v2":
+        for field in ("interaction_count", "analyzed_flows"):
+            if not isinstance(value.get(field), int) or isinstance(value.get(field), bool) or value[field] < 0:
+                raise ShadowSignalAPIError(f"ShadowSignal API returned an invalid {field}")
     return value
 
 
@@ -90,8 +93,20 @@ def analyze(
     timeout: float = 20,
     retries: int = 2,
 ) -> dict:
-    if payload.get("schema_version") != "shadowsignal-shape/v2":
-        raise ShadowSignalAPIError("only shadowsignal-shape/v2 payloads are supported")
+    request_schema = payload.get("schema_version")
+    profiles = {
+        "shadowsignal-shape/v2": (
+            "/v2/shape-analyses",
+            "shadowsignal-shape-result/v2",
+        ),
+        "shadowsignal-flow-stats/v2": (
+            "/v2/flow-stat-analyses",
+            "shadowsignal-flow-stats-result/v2",
+        ),
+    }
+    if request_schema not in profiles:
+        raise ShadowSignalAPIError("unsupported ShadowSignal v2 payload schema")
+    endpoint, result_schema = profiles[request_schema]
     observation_id = payload.get("observation_id")
     if not isinstance(observation_id, str):
         raise ShadowSignalAPIError("payload observation_id is required")
@@ -102,7 +117,7 @@ def analyze(
     key = api_key or configured_api_key()
     base = _validated_api_base(api_url)
     request = urllib.request.Request(
-        base + "/v2/shape-analyses",
+        base + endpoint,
         data=json.dumps(payload, separators=(",", ":")).encode(),
         headers={
             "Authorization": f"Bearer {key}",
@@ -118,7 +133,11 @@ def analyze(
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise ShadowSignalAPIError("ShadowSignal API response is too large")
-                return _validated_response(raw, observation_id=observation_id)
+                return _validated_response(
+                    raw,
+                    observation_id=observation_id,
+                    expected_schema=result_schema,
+                )
         except urllib.error.HTTPError as exc:
             message = exc.read(501).decode("utf-8", "replace")[:500]
             if exc.code not in RETRYABLE_STATUS or attempt >= retries:

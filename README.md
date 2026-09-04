@@ -1,6 +1,6 @@
 # ShadowSignal
 
-ShadowSignalは、通信内容を復号・送信せず、暗号化通信のサイズ・タイミング・方向から
+ShadowSignalは、通信内容を復号・送信せず、暗号化通信を端末内で集約した統計から
 生成AIサービスの利用兆候を確認する法人向け評価用クライアントです。対象を限定したPoCで、
 既存のDLP・SSE・SIEMへ追加できる通信判定の実現性を確認します。
 
@@ -16,16 +16,16 @@ ShadowSignalは、通信内容を復号・送信せず、暗号化通信のサ�
 ![APIへ送る情報と対象端末内に残す情報](docs/assets/data-boundary.png)
 
 対象端末は、宛先情報とランダムな観測IDの対応を端末内に保持します。APIへは量子化した
-通信形状データだけを送り、返された形状判定を端末内で宛先情報と結合します。
+フロー集約統計だけを送り、返された判定を端末内で宛先情報と結合します。
 
 ## データの取り扱い
 
 APIへ送る情報：
 
 - ランダムな観測ID
-- 最初の対象イベントからの相対時刻（10ミリ秒単位）
-- 通信方向（受信・送信）
-- 暗号化データのサイズ（32バイト単位）
+- TCP / QUIC区分
+- パケット数、通信時間、到着間隔の統計
+- 暗号化データサイズの分布、転送レート、送受信比率
 
 対象端末内に残す情報：
 
@@ -94,7 +94,7 @@ shadowsignal capture \
 {
   "final_verdict": "confirmed_ai_usage",
   "shape_verdict": "likely_llm",
-  "confidence": "high",
+  "confidence": "medium",
   "vendor": "Anthropic",
   "product": "claude-code"
 }

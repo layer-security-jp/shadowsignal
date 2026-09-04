@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+import math
 import uuid
 
 from .models import CapturedFlow, PacketEvent
 
 
 SCHEMA_VERSION = "shadowsignal-shape/v2"
+FLOW_STATS_SCHEMA_VERSION = "shadowsignal-flow-stats/v2"
 MAX_EVENTS_PER_FLOW = 512
 MAX_TOTAL_EVENTS = 2_048
 MAX_FLOWS = 16
@@ -20,6 +22,7 @@ REQUEST_BURST_GAP_MS = 400
 REQUEST_BURST_MIN_BYTES = 256
 RESPONSE_PRESERVATION_MS = 60_000
 MAX_EVENTS_PER_RESPONSE_WINDOW = 128
+FLOW_COALESCE_MS = 3
 
 
 def _quantize_time(offset_ms: int) -> int:
@@ -206,4 +209,109 @@ def build_session_payload(
         "granularity": "l4_segment",
         "grouping": "single_flow" if len(anonymous_flows) == 1 else "flow_set",
         "flows": anonymous_flows,
+    }
+
+
+def _bounded_round(value: float, low: int, high: int) -> int:
+    return max(low, min(high, int(round(value))))
+
+
+def _percentile(values: list[int], fraction: float) -> float:
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    if lower + 1 >= len(ordered):
+        return float(ordered[lower])
+    return ordered[lower] + (position - lower) * (
+        ordered[lower + 1] - ordered[lower]
+    )
+
+
+def _coalesced_inbound(flow: CapturedFlow) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for event in sorted(flow.events, key=lambda item: item.offset_ms):
+        if event.direction != "in":
+            continue
+        if merged and event.offset_ms - merged[-1][0] <= FLOW_COALESCE_MS:
+            merged[-1] = (merged[-1][0], merged[-1][1] + event.size)
+        else:
+            merged.append((event.offset_ms, event.size))
+    return merged
+
+
+def build_flow_stats_payload(
+    flow: CapturedFlow, *, observation_id: str | None = None
+) -> dict:
+    """Reduce one flow to quantized aggregate statistics with no event series."""
+    inbound = _coalesced_inbound(flow)
+    if len(inbound) < 2:
+        raise ValueError("at least two inbound packet events are required")
+    timestamps = [timestamp for timestamp, _size in inbound]
+    sizes = [size for _timestamp, size in inbound]
+    duration_ms = timestamps[-1] - timestamps[0]
+    if duration_ms <= 0:
+        raise ValueError("inbound packet events must span a positive duration")
+    intervals = [
+        timestamps[index + 1] - timestamps[index]
+        for index in range(len(timestamps) - 1)
+    ]
+    mean_size = sum(sizes) / len(sizes)
+    mean_interval = sum(intervals) / len(intervals)
+    size_deviation = math.sqrt(
+        sum((size - mean_size) ** 2 for size in sizes) / len(sizes)
+    )
+    interval_deviation = math.sqrt(
+        sum((interval - mean_interval) ** 2 for interval in intervals)
+        / len(intervals)
+    )
+    dribble_run = current_run = 1
+    for interval in intervals:
+        current_run = current_run + 1 if interval < 1_000 else 1
+        dribble_run = max(dribble_run, current_run)
+    outbound_bytes = sum(
+        event.size for event in flow.events if event.direction == "out"
+    )
+    inbound_bytes = sum(sizes)
+    median_interval_ms = sorted(intervals)[len(intervals) // 2]
+    return {
+        "schema_version": FLOW_STATS_SCHEMA_VERSION,
+        "observation_id": observation_id or "obs_" + uuid.uuid4().hex,
+        "transport": "quic" if flow.transport == "quic" else "tcp",
+        "inbound_packets": _bounded_round(len(inbound), 1, 10_000),
+        "duration_ms": _bounded_round(
+            round(duration_ms / 100) * 100, 100, 600_000
+        ),
+        "median_inbound_size": _bounded_round(
+            round(_percentile(sizes, 0.5) / 32) * 32, 32, 65_536
+        ),
+        "small_packet_ratio_milli": _bounded_round(
+            sum(size < 400 for size in sizes) / len(sizes) * 1_000, 0, 1_000
+        ),
+        "size_cv_milli": _bounded_round(
+            (size_deviation / mean_size if mean_size else 0) * 1_000,
+            0,
+            20_000,
+        ),
+        "iat_cv_milli": _bounded_round(
+            (interval_deviation / mean_interval if mean_interval else 0) * 1_000,
+            0,
+            20_000,
+        ),
+        "median_iat_ms": _bounded_round(
+            round(median_interval_ms / 10) * 10, 0, 600_000
+        ),
+        "density_milli": _bounded_round(
+            len(inbound) / (duration_ms / 1_000) * 1_000, 0, 500_000
+        ),
+        "kib_per_second_milli": _bounded_round(
+            inbound_bytes / (duration_ms / 1_000) / 1_024 * 1_000,
+            0,
+            10_000_000,
+        ),
+        "inbound_outbound_ratio_milli": _bounded_round(
+            inbound_bytes / max(outbound_bytes, 200) * 1_000,
+            0,
+            1_000_000,
+        ),
+        "dribble_run": _bounded_round(dribble_run, 1, 10_000),
     }

@@ -11,7 +11,7 @@ from .capture import CaptureError, capture_flows
 from .dashboard import serve_dashboard
 from .destinations import join_local_result, prefer_attributable_flows
 from .models import CapturedFlow, PacketEvent
-from .privacy import build_session_payload, build_shape_payload
+from .privacy import build_flow_stats_payload
 from .selection import select_candidate_flows
 
 
@@ -45,7 +45,9 @@ def print_result(result: dict) -> None:
 
 def run_self_test(args: argparse.Namespace) -> int:
     flow = synthetic_flow()
-    payload = build_shape_payload(flow, observation_id="obs_0123456789abcdef0123456789abcdef")
+    payload = build_flow_stats_payload(
+        flow, observation_id="obs_0123456789abcdef0123456789abcdef"
+    )
     if args.dry_run:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -82,8 +84,18 @@ def run_capture(args: argparse.Namespace) -> int:
         )
         return 2
 
-    payload = build_session_payload(flows)
-    context_flow = next((flow for flow in flows if flow.process_name), flows[0])
+    candidates = []
+    for flow in flows:
+        try:
+            candidates.append((flow, build_flow_stats_payload(flow)))
+        except ValueError:
+            continue
+    if not candidates:
+        print("判定に必要な受信イベントを取得できませんでした。", file=sys.stderr)
+        return 2
+    context_flow, payload = next(
+        (item for item in candidates if item[0].process_name), candidates[0]
+    )
     if args.dry_run:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
