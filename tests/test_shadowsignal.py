@@ -284,6 +284,36 @@ def test_event_limit_uses_full_budget_for_outbound_dominant_flow() -> None:
     assert sum(event["direction"] == "in" for event in events) == 20
 
 
+def test_event_limit_preserves_request_response_region_in_long_lived_flow() -> None:
+    main = CapturedFlow("tcp", 1, "203.0.113.10", 443)
+    main.events = [
+        PacketEvent(index * 150, "in", 96 + (index % 4) * 32)
+        for index in range(900)
+    ]
+    main.events.append(PacketEvent(60_000, "out", 640))
+    main.events.extend(
+        PacketEvent(61_000 + index * 220, "in", 800 + (index % 5) * 64)
+        for index in range(24)
+    )
+    other_flows = []
+    for port in range(2, 9):
+        flow = CapturedFlow("tcp", port, "203.0.113.10", 443)
+        flow.events = [PacketEvent(0, "in", 64)]
+        other_flows.append(flow)
+
+    payload = build_session_payload([main, *other_flows])
+    events = payload["flows"][0]["events"]
+    response = [
+        event
+        for event in events
+        if event["direction"] == "in" and event["size"] >= 800
+    ]
+
+    assert len(events) == 256
+    assert {event["offset_ms"] for event in events if event["direction"] == "out"} == {60_000}
+    assert len(response) == 24
+
+
 def test_session_payload_preserves_concurrent_flow_boundaries_without_context() -> None:
     first = CapturedFlow("tcp", 51001, "203.0.113.10", 443)
     first.events = [PacketEvent(0, "out", 310), PacketEvent(500, "in", 121)]
