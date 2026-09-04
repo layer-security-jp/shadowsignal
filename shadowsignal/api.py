@@ -12,9 +12,10 @@ import urllib.request
 
 import certifi
 
+from . import __version__
+
 
 DEFAULT_API = "https://shadowsignal-api.layersecurity.jp"
-CLIENT_VERSION = "1.4.0"
 MAX_RESPONSE_BYTES = 64 * 1024
 RETRYABLE_STATUS = {429, 502, 503, 504}
 VALID_VERDICTS = {"likely_llm", "indeterminate", "unlikely_llm"}
@@ -106,7 +107,7 @@ def analyze(
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "User-Agent": f"layersecurity-shadowsignal/{CLIENT_VERSION}",
+            "User-Agent": f"layersecurity-shadowsignal/{__version__}",
         },
         method="POST",
     )
