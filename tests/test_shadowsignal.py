@@ -643,7 +643,12 @@ def _sample_pcapng() -> bytes:
     interface = _pcapng_block(1, struct.pack("<HHI", 1, 0, 65535) + timestamp_option)
     outbound = _enhanced_packet(_tcp_frame("10.0.0.2", "203.0.113.10", 51001, 443, 32), 1_000_000)
     inbound = _enhanced_packet(_tcp_frame("203.0.113.10", "10.0.0.2", 443, 51001, 120), 1_500_000)
-    duplicate = _enhanced_packet(_tcp_frame("203.0.113.10", "10.0.0.2", 443, 51001, 120), 1_500_000)
+    # pktmon can timestamp the same packet slightly differently at adjacent
+    # Windows networking components.
+    duplicate = _enhanced_packet(
+        _tcp_frame("203.0.113.10", "10.0.0.2", 443, 51001, 120),
+        1_500_500,
+    )
     return section + interface + outbound + inbound + duplicate
 
 

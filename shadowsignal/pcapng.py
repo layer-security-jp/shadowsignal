@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,7 @@ class _Packet:
     destination_port: int
     payload_size: int
     server_name: str | None = None
+    dedupe_identity: bytes = b""
 
 
 def _tls_server_name(payload: bytes) -> str | None:
@@ -199,6 +201,9 @@ def _transport_packet(frame: bytes, *, link_type: int, timestamp: float) -> _Pac
         if len(frame) < transport_offset + 20:
             return None
         source_port, destination_port = struct.unpack_from("!HH", frame, transport_offset)
+        sequence_number, acknowledgement_number = struct.unpack_from(
+            "!II", frame, transport_offset + 4
+        )
         tcp_header_size = (frame[transport_offset + 12] >> 4) * 4
         if tcp_header_size < 20:
             return None
@@ -207,6 +212,20 @@ def _transport_packet(frame: bytes, *, link_type: int, timestamp: float) -> _Pac
         payload_offset = transport_offset + tcp_header_size
         captured_end = min(len(frame), transport_offset + max(0, ip_payload_size))
         server_name = _tls_server_name(frame[payload_offset:captured_end])
+        dedupe_material = (
+            bytes(ipaddress.ip_address(source_ip).packed)
+            + bytes(ipaddress.ip_address(destination_ip).packed)
+            + struct.pack(
+                "!BHHIIHB",
+                protocol,
+                source_port,
+                destination_port,
+                sequence_number,
+                acknowledgement_number,
+                payload_size,
+                frame[transport_offset + 13],
+            )
+        )
     elif protocol == 17:
         if len(frame) < transport_offset + 8:
             return None
@@ -214,6 +233,14 @@ def _transport_packet(frame: bytes, *, link_type: int, timestamp: float) -> _Pac
         payload_size = ip_payload_size - 8
         transport = "quic"
         server_name = None
+        payload_offset = transport_offset + 8
+        captured_end = min(len(frame), transport_offset + max(0, ip_payload_size))
+        dedupe_material = (
+            bytes(ipaddress.ip_address(source_ip).packed)
+            + bytes(ipaddress.ip_address(destination_ip).packed)
+            + struct.pack("!BHHH", protocol, source_port, destination_port, payload_size)
+            + frame[payload_offset:captured_end]
+        )
     else:
         return None
 
@@ -228,6 +255,7 @@ def _transport_packet(frame: bytes, *, link_type: int, timestamp: float) -> _Pac
         destination_port=destination_port,
         payload_size=payload_size,
         server_name=server_name,
+        dedupe_identity=hashlib.blake2s(dedupe_material, digest_size=16).digest(),
     )
 
 
@@ -295,7 +323,12 @@ def _packets_to_flows(
 
     started_at = min(packet.timestamp for packet in relevant)
     flows: dict[tuple[str, int, str, int], CapturedFlow] = {}
-    seen: set[tuple[float, str, str, int, int, int]] = set()
+    # pktmon can emit the same packet more than once while it crosses adjacent
+    # Windows networking components.  ETL conversion does not preserve a
+    # portable component identifier, so collapse only packets with the same
+    # transport identity observed within a narrow window.  Later TCP
+    # retransmissions remain visible as separate events.
+    last_seen: dict[bytes, float] = {}
 
     for packet in sorted(relevant, key=lambda item: item.timestamp):
         if packet.destination_ip in target_ips and packet.destination_port == 443:
@@ -310,17 +343,13 @@ def _packets_to_flows(
             continue
 
         offset_ms = max(0, round((packet.timestamp - started_at) * 1000))
-        duplicate_key = (
-            round(packet.timestamp, 9),
-            packet.source_ip,
-            packet.destination_ip,
-            packet.source_port,
-            packet.destination_port,
-            packet.payload_size,
-        )
-        if duplicate_key in seen:
+        previous_timestamp = last_seen.get(packet.dedupe_identity)
+        if (
+            previous_timestamp is not None
+            and packet.timestamp - previous_timestamp <= 0.002
+        ):
             continue
-        seen.add(duplicate_key)
+        last_seen[packet.dedupe_identity] = packet.timestamp
 
         key = (packet.transport, local_port, remote_ip, 443)
         flow = flows.get(key)
