@@ -220,9 +220,16 @@ def join_local_result(
         parent_process=parent_process,
         observed_server_name=observed_server_name,
     )
-    shape_verdict = str(api_result.get("shape_verdict", "indeterminate"))
-    sustained_stream = api_result.get("sustained_stream") is True
-    interaction_triggered = api_result.get("interaction_triggered") is True
+    shape_verdict = str(
+        api_result.get("verdict", api_result.get("shape_verdict", "indeterminate"))
+    )
+    interaction_count = int(api_result.get("interaction_count", 0) or 0)
+    sustained_stream = (
+        api_result.get("sustained_stream") is True or interaction_count > 0
+    )
+    interaction_triggered = (
+        api_result.get("interaction_triggered") is True or interaction_count > 0
+    )
     return {
         "observation_id": api_result.get("observation_id"),
         "final_verdict": final_verdict(
@@ -234,10 +241,13 @@ def join_local_result(
             trusted_agent_process=bool(context["trusted_agent_process"]),
         ),
         "shape_verdict": shape_verdict,
-        "confidence": api_result.get("confidence_bucket"),
+        "confidence": api_result.get(
+            "confidence", api_result.get("confidence_bucket")
+        ),
         "evidence_class": api_result.get("evidence_class"),
         "sustained_stream": sustained_stream,
         "interaction_triggered": interaction_triggered,
+        "interaction_count": interaction_count,
         **context,
         "model_version": api_result.get("model_version"),
     }

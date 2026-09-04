@@ -27,13 +27,16 @@ def configured_api_key() -> str:
 
 def analyze(payload: dict, *, api_url: str = DEFAULT_API, api_key: str | None = None) -> dict:
     key = api_key or configured_api_key()
+    api_version = (
+        "v2" if payload.get("schema_version") == "shadowsignal-shape/v2" else "v1"
+    )
     request = urllib.request.Request(
-        api_url.rstrip("/") + "/v1/shape-analyses",
+        api_url.rstrip("/") + f"/{api_version}/shape-analyses",
         data=json.dumps(payload, separators=(",", ":")).encode(),
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "User-Agent": "layersecurity-shadowsignal/1.2.0",
+            "User-Agent": "layersecurity-shadowsignal/1.3.0",
         },
         method="POST",
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import io
 import signal
 import struct
 from pathlib import Path
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from shadowsignal import capture, dashboard
+from shadowsignal import api, capture, dashboard
 from shadowsignal.cli import synthetic_flow
 from shadowsignal.destinations import final_verdict, join_local_result, prefer_attributable_flows
 from shadowsignal.models import CapturedFlow, PacketEvent
@@ -47,12 +48,31 @@ def test_payload_contains_only_allowlisted_top_level_fields() -> None:
     assert set(payload) == {
         "schema_version",
         "observation_id",
-        "transport",
         "granularity",
-        "events",
+        "grouping",
+        "flows",
     }
     assert not (set(payload) & FORBIDDEN_FIELDS)
-    assert payload["schema_version"] == "shadowsignal-shape/v1"
+    assert payload["schema_version"] == "shadowsignal-shape/v2"
+    assert set(payload["flows"][0]) == {"transport", "events"}
+
+
+def test_v2_payload_is_sent_to_v2_endpoint(monkeypatch) -> None:
+    requested_urls = []
+
+    def fake_urlopen(request, **_kwargs):
+        requested_urls.append(request.full_url)
+        return io.BytesIO(b'{"verdict":"indeterminate"}')
+
+    monkeypatch.setattr(api.urllib.request, "urlopen", fake_urlopen)
+    result = api.analyze(
+        build_shape_payload(synthetic_flow()),
+        api_url="https://example.invalid",
+        api_key="test-key",
+    )
+
+    assert requested_urls == ["https://example.invalid/v2/shape-analyses"]
+    assert result["verdict"] == "indeterminate"
 
 
 def test_process_and_destination_stay_in_local_join_only() -> None:
@@ -147,12 +167,13 @@ def test_events_are_sorted_and_limited() -> None:
     flow = CapturedFlow("tcp", 1, "203.0.113.10", 443)
     flow.events = [PacketEvent(offset, "in", 100) for offset in range(700, -1, -1)]
     payload = build_shape_payload(flow)
-    offsets = [event["offset_ms"] for event in payload["events"]]
+    events = payload["flows"][0]["events"]
+    offsets = [event["offset_ms"] for event in events]
     assert len(offsets) == 512
     assert offsets == sorted(offsets)
     assert offsets[-1] == 700
     assert all(offset % 10 == 0 for offset in offsets)
-    assert all(event["size"] == 128 for event in payload["events"])
+    assert all(event["size"] == 128 for event in events)
 
 
 def test_event_limit_preserves_sparse_outbound_direction() -> None:
@@ -162,8 +183,9 @@ def test_event_limit_preserves_sparse_outbound_direction() -> None:
 
     payload = build_shape_payload(flow)
 
-    assert len(payload["events"]) == 512
-    assert sum(event["direction"] == "out" for event in payload["events"]) == 20
+    events = payload["flows"][0]["events"]
+    assert len(events) == 512
+    assert sum(event["direction"] == "out" for event in events) == 20
 
 
 def test_event_limit_uses_full_budget_for_outbound_dominant_flow() -> None:
@@ -173,11 +195,12 @@ def test_event_limit_uses_full_budget_for_outbound_dominant_flow() -> None:
 
     payload = build_shape_payload(flow)
 
-    assert len(payload["events"]) == 512
-    assert sum(event["direction"] == "in" for event in payload["events"]) == 20
+    events = payload["flows"][0]["events"]
+    assert len(events) == 512
+    assert sum(event["direction"] == "in" for event in events) == 20
 
 
-def test_session_payload_combines_concurrent_flows_without_context() -> None:
+def test_session_payload_preserves_concurrent_flow_boundaries_without_context() -> None:
     first = CapturedFlow("tcp", 51001, "203.0.113.10", 443)
     first.events = [PacketEvent(0, "out", 310), PacketEvent(500, "in", 121)]
     second = CapturedFlow("tcp", 51002, "203.0.113.10", 443)
@@ -187,7 +210,9 @@ def test_session_payload_combines_concurrent_flows_without_context() -> None:
         [first, second], observation_id="obs_0123456789abcdef0123456789abcdef"
     )
 
-    assert [event["offset_ms"] for event in payload["events"]] == [0, 250, 500, 900]
+    assert payload["grouping"] == "flow_set"
+    assert [event["offset_ms"] for event in payload["flows"][0]["events"]] == [0, 500]
+    assert [event["offset_ms"] for event in payload["flows"][1]["events"]] == [250, 900]
     assert payload["observation_id"] == "obs_0123456789abcdef0123456789abcdef"
     assert "destination_host" not in payload
     assert "process_name" not in payload
@@ -756,14 +781,14 @@ def test_dashboard_filters_flows_and_returns_request_and_result(monkeypatch) -> 
         dashboard,
         "analyze",
         lambda payload, api_url: {
-            "schema_version": "shadowsignal-shape-result/v1",
+            "schema_version": "shadowsignal-shape-result/v2",
             "observation_id": payload["observation_id"],
-            "shape_verdict": "likely_llm",
-            "confidence_bucket": "high",
-            "evidence_class": "streaming_cadence",
-            "sustained_stream": True,
-            "interaction_triggered": True,
-            "model_version": "shadowsignal-shape-2026-09-r3",
+            "verdict": "likely_llm",
+            "confidence": "high",
+            "evidence_class": "interactive_generation",
+            "interaction_count": 1,
+            "analyzed_flows": 1,
+            "model_version": "shadowsignal-shape-2026-09-r4",
             "api_url": api_url,
         },
     )
@@ -783,5 +808,5 @@ def test_dashboard_filters_flows_and_returns_request_and_result(monkeypatch) -> 
     item = result["items"][0]
     assert item["local_context"]["destination_host"] == "api.anthropic.com"
     assert item["local_result"]["final_verdict"] == "confirmed_ai_usage"
-    assert item["api_result"]["shape_verdict"] == "likely_llm"
+    assert item["api_result"]["verdict"] == "likely_llm"
     assert not (set(item["api_request"]) & FORBIDDEN_FIELDS)
