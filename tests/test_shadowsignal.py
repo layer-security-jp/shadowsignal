@@ -796,7 +796,7 @@ def test_dashboard_filters_flows_and_returns_request_and_result(monkeypatch) -> 
             "evidence_class": "interactive_generation",
             "interaction_count": 1,
             "analyzed_flows": 1,
-            "model_version": "shadowsignal-shape-2026-09-r5",
+            "model_version": "shadowsignal-shape-2026-09-r6",
             "api_url": api_url,
         },
     )
