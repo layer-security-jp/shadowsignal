@@ -11,6 +11,7 @@ from .models import CapturedFlow, PacketEvent
 
 SCHEMA_VERSION = "shadowsignal-shape/v2"
 FLOW_STATS_SCHEMA_VERSION = "shadowsignal-flow-stats/v2"
+RICH_FLOW_STATS_SCHEMA_VERSION = "shadowsignal-flow-stats/v3-draft"
 MAX_EVENTS_PER_FLOW = 512
 MAX_TOTAL_EVENTS = 2_048
 MAX_FLOWS = 16
@@ -101,6 +102,40 @@ def _response_windows(
             min(len(response), 128),
             span,
         )
+        windows.append((rank, burst, response))
+    return sorted(windows, key=lambda item: item[0], reverse=True)
+
+
+def _rich_request_windows(
+    events: list[PacketEvent], inbound: list[tuple[int, int]]
+) -> list[tuple[tuple[int, int, int], list[PacketEvent], list[tuple[int, int]]]]:
+    outbound = [event for event in events if event.direction == "out"]
+    bursts: list[list[PacketEvent]] = []
+    for event in outbound:
+        if bursts and event.offset_ms - bursts[-1][-1].offset_ms <= REQUEST_BURST_GAP_MS:
+            bursts[-1].append(event)
+        else:
+            bursts.append([event])
+    substantial = [
+        burst
+        for burst in bursts
+        if sum(event.size for event in burst) >= REQUEST_BURST_MIN_BYTES
+    ]
+    inbound_offsets = [timestamp for timestamp, _size in inbound]
+    windows = []
+    for index, burst in enumerate(substantial):
+        ended_at = burst[-1].offset_ms
+        deadline = min(
+            ended_at + RESPONSE_PRESERVATION_MS,
+            substantial[index + 1][0].offset_ms
+            if index + 1 < len(substantial)
+            else ended_at + RESPONSE_PRESERVATION_MS,
+        )
+        first = bisect_right(inbound_offsets, ended_at)
+        last = bisect_right(inbound_offsets, deadline)
+        response = inbound[first:last]
+        span = response[-1][0] - response[0][0] if len(response) > 1 else 0
+        rank = (int(len(response) >= 8 and span >= 1_000), min(len(response), 128), span)
         windows.append((rank, burst, response))
     return sorted(windows, key=lambda item: item[0], reverse=True)
 
@@ -216,6 +251,10 @@ def _bounded_round(value: float, low: int, high: int) -> int:
     return max(low, min(high, int(round(value))))
 
 
+def _byte_log2_bucket(value: int) -> int:
+    return 0 if value <= 0 else min(31, value.bit_length())
+
+
 def _percentile(values: list[int], fraction: float) -> float:
     ordered = sorted(values)
     position = (len(ordered) - 1) * fraction
@@ -227,9 +266,9 @@ def _percentile(values: list[int], fraction: float) -> float:
     )
 
 
-def _coalesced_inbound(flow: CapturedFlow) -> list[tuple[int, int]]:
+def _coalesce_inbound_events(events: list[PacketEvent]) -> list[tuple[int, int]]:
     merged: list[tuple[int, int]] = []
-    for event in sorted(flow.events, key=lambda item: item.offset_ms):
+    for event in sorted(events, key=lambda item: item.offset_ms):
         if event.direction != "in":
             continue
         if merged and event.offset_ms - merged[-1][0] <= FLOW_COALESCE_MS:
@@ -239,10 +278,40 @@ def _coalesced_inbound(flow: CapturedFlow) -> list[tuple[int, int]]:
     return merged
 
 
+def _coalesced_inbound(flow: CapturedFlow) -> list[tuple[int, int]]:
+    return _coalesce_inbound_events(flow.events)
+
+
 def build_flow_stats_payload(
     flow: CapturedFlow, *, observation_id: str | None = None
 ) -> dict:
     """Reduce one flow to quantized aggregate statistics with no event series."""
+    rich = build_rich_flow_stats_payload(flow, observation_id=observation_id)
+    fields = (
+        "observation_id",
+        "transport",
+        "inbound_packets",
+        "duration_ms",
+        "median_inbound_size",
+        "small_packet_ratio_milli",
+        "size_cv_milli",
+        "iat_cv_milli",
+        "median_iat_ms",
+        "density_milli",
+        "kib_per_second_milli",
+        "inbound_outbound_ratio_milli",
+        "dribble_run",
+    )
+    return {
+        "schema_version": FLOW_STATS_SCHEMA_VERSION,
+        **{field: rich[field] for field in fields},
+    }
+
+
+def build_rich_flow_stats_payload(
+    flow: CapturedFlow, *, observation_id: str | None = None
+) -> dict:
+    """Build the fixed-size v3 candidate vector without identity or raw events."""
     inbound = _coalesced_inbound(flow)
     if len(inbound) < 2:
         raise ValueError("at least two inbound packet events are required")
@@ -273,24 +342,107 @@ def build_flow_stats_payload(
     )
     inbound_bytes = sum(sizes)
     median_interval_ms = sorted(intervals)[len(intervals) // 2]
+    size_p25 = _percentile(sizes, 0.25)
+    size_p50 = _percentile(sizes, 0.50)
+    size_p75 = _percentile(sizes, 0.75)
+    interval_p25 = _percentile(intervals, 0.25)
+    interval_p75 = _percentile(intervals, 0.75)
+    interval_p90 = _percentile(intervals, 0.90)
+    clustered = (
+        sum(
+            1
+            for interval in intervals
+            if 0.5 * median_interval_ms <= interval <= 1.5 * median_interval_ms
+        )
+        if median_interval_ms
+        else 0
+    )
+    windows = _rich_request_windows(
+        sorted(flow.events, key=lambda event: event.offset_ms), inbound
+    )
+    if windows:
+        _rank, request, response = windows[0]
+    else:
+        request, response = [], []
+    request_end = request[-1].offset_ms if request else 0
+    response_delay_ms = (
+        response[0][0] - request_end if response else 0
+    )
+    response_duration_ms = (
+        response[-1][0] - response[0][0]
+        if len(response) > 1
+        else 0
+    )
+    first_timestamp = timestamps[0]
+    active_seconds = len(
+        {(timestamp - first_timestamp) // 1_000 for timestamp in timestamps}
+    )
+    total_seconds = max(1, duration_ms // 1_000 + 1)
+    per_second = [0] * total_seconds
+    for timestamp in timestamps:
+        second = min((timestamp - first_timestamp) // 1_000, total_seconds - 1)
+        per_second[second] += 1
+    rate_buckets = [0] * 6
+    for count in per_second:
+        if count == 0:
+            bucket = 0
+        elif count == 1:
+            bucket = 1
+        elif count <= 3:
+            bucket = 2
+        elif count <= 7:
+            bucket = 3
+        elif count <= 15:
+            bucket = 4
+        else:
+            bucket = 5
+        rate_buckets[bucket] += 1
+    rate_histogram = [
+        count * 1_000 // total_seconds for count in rate_buckets[:-1]
+    ]
+    rate_histogram.append(1_000 - sum(rate_histogram))
+    idle_milliseconds = sum(max(0, interval - 1_000) for interval in intervals)
     return {
-        "schema_version": FLOW_STATS_SCHEMA_VERSION,
+        "schema_version": RICH_FLOW_STATS_SCHEMA_VERSION,
         "observation_id": observation_id or "obs_" + uuid.uuid4().hex,
         "transport": "quic" if flow.transport == "quic" else "tcp",
         "inbound_packets": _bounded_round(len(inbound), 1, 10_000),
+        "outbound_packets": _bounded_round(
+            sum(event.direction == "out" for event in flow.events), 0, 10_000
+        ),
         "duration_ms": _bounded_round(
             round(duration_ms / 100) * 100, 100, 600_000
         ),
+        "inbound_size_p25": _bounded_round(
+            round(size_p25 / 32) * 32, 32, 65_536
+        ),
         "median_inbound_size": _bounded_round(
-            round(_percentile(sizes, 0.5) / 32) * 32, 32, 65_536
+            round(size_p50 / 32) * 32, 32, 65_536
+        ),
+        "inbound_size_p75": _bounded_round(
+            round(size_p75 / 32) * 32, 32, 65_536
+        ),
+        "inbound_size_p90": _bounded_round(
+            round(_percentile(sizes, 0.90) / 32) * 32, 32, 65_536
         ),
         "small_packet_ratio_milli": _bounded_round(
             sum(size < 400 for size in sizes) / len(sizes) * 1_000, 0, 1_000
+        ),
+        "large_packet_ratio_milli": _bounded_round(
+            sum(size >= 1_200 for size in sizes) / len(sizes) * 1_000, 0, 1_000
         ),
         "size_cv_milli": _bounded_round(
             (size_deviation / mean_size if mean_size else 0) * 1_000,
             0,
             20_000,
+        ),
+        "size_iqr_ratio_milli": _bounded_round(
+            ((size_p75 - size_p25) / size_p50 if size_p50 else 0) * 1_000,
+            0,
+            20_000,
+        ),
+        "iat_p25_ms": _bounded_round(
+            round(interval_p25 / 10) * 10, 0, 600_000
         ),
         "iat_cv_milli": _bounded_round(
             (interval_deviation / mean_interval if mean_interval else 0) * 1_000,
@@ -300,6 +452,15 @@ def build_flow_stats_payload(
         "median_iat_ms": _bounded_round(
             round(median_interval_ms / 10) * 10, 0, 600_000
         ),
+        "iat_p75_ms": _bounded_round(
+            round(interval_p75 / 10) * 10, 0, 600_000
+        ),
+        "iat_p90_ms": _bounded_round(
+            round(interval_p90 / 10) * 10, 0, 600_000
+        ),
+        "gap_cluster_ratio_milli": _bounded_round(
+            clustered / len(intervals) * 1_000, 0, 1_000
+        ),
         "density_milli": _bounded_round(
             len(inbound) / (duration_ms / 1_000) * 1_000, 0, 500_000
         ),
@@ -308,10 +469,38 @@ def build_flow_stats_payload(
             0,
             10_000_000,
         ),
+        "outbound_bytes_log2": _byte_log2_bucket(outbound_bytes),
         "inbound_outbound_ratio_milli": _bounded_round(
             inbound_bytes / max(outbound_bytes, 200) * 1_000,
             0,
             1_000_000,
         ),
         "dribble_run": _bounded_round(dribble_run, 1, 10_000),
+        "request_bursts": _bounded_round(len(windows), 0, 1_000),
+        "request_bytes_log2": _byte_log2_bucket(
+            sum(event.size for event in request)
+        ),
+        "response_delay_ms": _bounded_round(
+            round(response_delay_ms / 10) * 10, 0, 600_000
+        ),
+        "post_request_inbound_packets": _bounded_round(
+            len(response), 0, 10_000
+        ),
+        "post_request_duration_ms": _bounded_round(
+            round(response_duration_ms / 100) * 100, 0, 600_000
+        ),
+        "post_request_bytes_log2": _byte_log2_bucket(
+            sum(size for _timestamp, size in response)
+        ),
+        "active_seconds": _bounded_round(active_seconds, 1, 600),
+        "active_ratio_milli": _bounded_round(
+            active_seconds / total_seconds * 1_000, 0, 1_000
+        ),
+        "idle_ratio_milli": _bounded_round(
+            idle_milliseconds / duration_ms * 1_000, 0, 1_000
+        ),
+        "max_idle_ms": _bounded_round(
+            round(max(intervals) / 100) * 100, 0, 600_000
+        ),
+        "inbound_rate_histogram_milli": rate_histogram,
     }

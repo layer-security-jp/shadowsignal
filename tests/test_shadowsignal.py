@@ -20,6 +20,7 @@ from shadowsignal.pcapng import _tls_server_name, parse_pcapng
 from shadowsignal.pcap import parse_pcap
 from shadowsignal.privacy import (
     build_flow_stats_payload,
+    build_rich_flow_stats_payload,
     build_session_payload,
     build_shape_payload,
 )
@@ -95,7 +96,7 @@ def test_v2_payload_is_sent_to_v2_endpoint(monkeypatch) -> None:
     )
 
     assert requested_urls == ["https://example.invalid/v2/shape-analyses"]
-    assert requests[0].get_header("User-agent") == "layersecurity-shadowsignal/1.5.1"
+    assert requests[0].get_header("User-agent") == "layersecurity-shadowsignal/1.6.0"
     assert result["verdict"] == "indeterminate"
 
 
@@ -164,6 +165,30 @@ def test_aggregate_payload_contains_only_quantized_statistics() -> None:
         "offset_ms",
         "direction",
         '"size"',
+    ):
+        assert forbidden not in serialized
+
+
+def test_rich_aggregate_adds_structure_without_identity_or_event_series() -> None:
+    payload = build_rich_flow_stats_payload(
+        synthetic_flow(), observation_id="obs_0123456789abcdef0123456789abcdef"
+    )
+
+    assert payload["schema_version"] == "shadowsignal-flow-stats/v3-draft"
+    assert payload["request_bursts"] == 1
+    assert payload["post_request_inbound_packets"] == 13
+    assert len(payload["inbound_rate_histogram_milli"]) == 6
+    assert sum(payload["inbound_rate_histogram_milli"]) == 1_000
+    serialized = json.dumps(payload)
+    for forbidden in (
+        "203.0.113.10",
+        "claude.exe",
+        "Code.exe",
+        "remote_ip",
+        "process_name",
+        "offset_ms",
+        "direction",
+        '"events"',
     ):
         assert forbidden not in serialized
 
