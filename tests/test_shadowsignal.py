@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import ipaddress
 import io
+import json
 import signal
 import struct
+import urllib.error
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,20 +62,98 @@ def test_payload_contains_only_allowlisted_top_level_fields() -> None:
 
 def test_v2_payload_is_sent_to_v2_endpoint(monkeypatch) -> None:
     requested_urls = []
+    payload = build_shape_payload(synthetic_flow())
 
-    def fake_urlopen(request, **_kwargs):
+    def fake_open(request, **_kwargs):
         requested_urls.append(request.full_url)
-        return io.BytesIO(b'{"verdict":"indeterminate"}')
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "schema_version": "shadowsignal-shape-result/v2",
+                    "observation_id": payload["observation_id"],
+                    "verdict": "indeterminate",
+                    "confidence": "low",
+                    "evidence_class": "insufficient_data",
+                    "interaction_count": 0,
+                    "analyzed_flows": 1,
+                    "model_version": "shadowsignal-shape-2026-09-r7",
+                }
+            ).encode()
+        )
 
-    monkeypatch.setattr(api.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(api, "_open_request", fake_open)
     result = api.analyze(
-        build_shape_payload(synthetic_flow()),
+        payload,
         api_url="https://example.invalid",
         api_key="test-key",
     )
 
     assert requested_urls == ["https://example.invalid/v2/shape-analyses"]
     assert result["verdict"] == "indeterminate"
+
+
+def test_api_client_rejects_mismatched_observation_id(monkeypatch) -> None:
+    payload = build_shape_payload(synthetic_flow())
+    response = {
+        "schema_version": "shadowsignal-shape-result/v2",
+        "observation_id": "obs_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verdict": "likely_llm",
+        "confidence": "high",
+        "evidence_class": "interactive_generation",
+        "interaction_count": 1,
+        "analyzed_flows": 1,
+        "model_version": "shadowsignal-shape-2026-09-r7",
+    }
+    monkeypatch.setattr(
+        api,
+        "_open_request",
+        lambda *_args, **_kwargs: io.BytesIO(json.dumps(response).encode()),
+    )
+
+    with pytest.raises(api.ShadowSignalAPIError, match="mismatched observation_id"):
+        api.analyze(payload, api_url="https://example.invalid", api_key="test-key")
+
+
+def test_api_client_retries_429_without_leaking_key(monkeypatch) -> None:
+    payload = build_shape_payload(synthetic_flow())
+    response = {
+        "schema_version": "shadowsignal-shape-result/v2",
+        "observation_id": payload["observation_id"],
+        "verdict": "unlikely_llm",
+        "confidence": "medium",
+        "evidence_class": "non_interactive",
+        "interaction_count": 0,
+        "analyzed_flows": 1,
+        "model_version": "shadowsignal-shape-2026-09-r7",
+    }
+    calls = []
+    headers = Message()
+    headers["Retry-After"] = "0"
+
+    def fake_open(request, **_kwargs):
+        calls.append(request)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(request.full_url, 429, "rate limited", headers, io.BytesIO(b"{}"))
+        return io.BytesIO(json.dumps(response).encode())
+
+    monkeypatch.setattr(api, "_open_request", fake_open)
+    result = api.analyze(
+        payload,
+        api_url="https://example.invalid",
+        api_key="do-not-log-this",
+        retries=1,
+    )
+
+    assert result["verdict"] == "unlikely_llm"
+    assert len(calls) == 2
+
+
+def test_api_client_refuses_plain_http_except_loopback() -> None:
+    payload = build_shape_payload(synthetic_flow())
+
+    with pytest.raises(api.ShadowSignalAPIError, match="must use HTTPS"):
+        api.analyze(payload, api_url="http://example.com", api_key="test-key")
+    assert api._validated_api_base("http://127.0.0.1:8000") == "http://127.0.0.1:8000"
 
 
 def test_process_and_destination_stay_in_local_join_only() -> None:
@@ -796,7 +877,7 @@ def test_dashboard_filters_flows_and_returns_request_and_result(monkeypatch) -> 
             "evidence_class": "interactive_generation",
             "interaction_count": 1,
             "analyzed_flows": 1,
-            "model_version": "shadowsignal-shape-2026-09-r6",
+            "model_version": "shadowsignal-shape-2026-09-r7",
             "api_url": api_url,
         },
     )

@@ -1,12 +1,13 @@
 # ShadowSignal
 
 ShadowSignalは、通信内容を復号・送信せず、暗号化通信のサイズ・タイミング・方向から
-生成AIサービスの利用兆候を確認する技術デモです。macOS上のClaude Codeで実測確認して
-います。あらゆるIDEや生成AIサービスの検知を保証するものではありません。
+生成AIサービスの利用兆候を確認する法人向け評価用クライアントです。対象を限定したPoCで、
+既存のDLP・SSE・SIEMへ追加できる通信判定の実現性を確認します。
 
 - API: <https://shadowsignal-api.layersecurity.jp>
 - API仕様: <https://shadowsignal-api.layersecurity.jp/docs>
 - データ収集仕様: [docs/DATA_COLLECTION.md](docs/DATA_COLLECTION.md)
+- PoCの実施範囲: [docs/POC_SCOPE.md](docs/POC_SCOPE.md)
 
 ## 構成
 
@@ -99,13 +100,14 @@ shadowsignal capture \
 }
 ```
 
-## 利用上の注意
+## 利用条件
 
 - 監視権限を持つ端末とネットワークでのみ使用してください。
 - 取得用の一時ファイルは端末内で解析後に削除し、APIへ送信しません。
 - 端末内で通信先または通信元プロセスを確認できない観測は、生成AIの利用確定に使用しません。
 - 通常のHTTPS通信と同様に、API基盤は接続元IPと接続時刻を観測し得ます。
-- 本リポジトリは技術デモであり、検知保証や通信内容の検査を提供するものではありません。
+- 判定は`likely_llm`、`indeterminate`、`unlikely_llm`の3値で、通信内容の検査や遮断は行いません。
+- 継続監視、全社配布、他製品との本番連携はPoC後の個別設計です。
 
 ## ライセンス
 
