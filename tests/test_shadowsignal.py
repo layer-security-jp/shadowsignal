@@ -564,6 +564,14 @@ def test_live_capture_rejects_unsupported_platform(monkeypatch) -> None:
         capture.capture_flows(target_host="api.anthropic.com", duration=5)
 
 
+def test_macos_bpf_access_requires_readable_and_writable_device(monkeypatch) -> None:
+    monkeypatch.setattr(capture.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(capture.Path, "glob", lambda _self, _pattern: [Path("/dev/bpf0")])
+    monkeypatch.setattr(capture.os, "access", lambda _path, mode: mode == 6)
+
+    assert capture.has_macos_bpf_access() is True
+
+
 def test_macos_route_lookup_selects_real_interfaces(monkeypatch) -> None:
     calls: list[list[str]] = []
 
@@ -788,7 +796,7 @@ def test_dashboard_filters_flows_and_returns_request_and_result(monkeypatch) -> 
             "evidence_class": "interactive_generation",
             "interaction_count": 1,
             "analyzed_flows": 1,
-            "model_version": "shadowsignal-shape-2026-09-r4",
+            "model_version": "shadowsignal-shape-2026-09-r5",
             "api_url": api_url,
         },
     )

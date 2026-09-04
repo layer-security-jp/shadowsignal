@@ -31,6 +31,16 @@ class CaptureError(RuntimeError):
     """A safe, user-facing capture failure."""
 
 
+def has_macos_bpf_access() -> bool:
+    """Return whether an administrator has granted direct BPF access."""
+    if platform.system() != "Darwin":
+        return False
+    return any(
+        os.access(path, os.R_OK | os.W_OK)
+        for path in Path("/dev").glob("bpf[0-9]*")
+    )
+
+
 def resolve_target(hostname: str) -> set[str]:
     addresses = {
         item[4][0]
@@ -226,7 +236,7 @@ def _capture_macos(
     target_host: str,
     duration: int,
 ) -> list[CapturedFlow]:
-    if os.geteuid() != 0:
+    if os.geteuid() != 0 and not has_macos_bpf_access():
         raise PermissionError
 
     executable = shutil.which("tcpdump")

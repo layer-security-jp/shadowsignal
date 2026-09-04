@@ -36,7 +36,7 @@ def analyze(payload: dict, *, api_url: str = DEFAULT_API, api_key: str | None = 
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "User-Agent": "layersecurity-shadowsignal/1.3.0",
+            "User-Agent": "layersecurity-shadowsignal/1.3.1",
         },
         method="POST",
     )
