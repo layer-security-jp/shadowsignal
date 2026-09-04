@@ -96,27 +96,27 @@ _HTML = r"""<!doctype html>
   <style>
     :root { color-scheme: dark; --ink:#edf4ff; --muted:#8fa2bb; --line:#25384e; --panel:#101b29; --blue:#50a7ff; --cyan:#55e6c1; --bad:#ff7b87; }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; color:var(--ink); background:radial-gradient(circle at 85% 0,#183a58 0,transparent 35%),#07111d; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    main { width:min(1120px,calc(100% - 32px)); margin:0 auto; padding:42px 0 64px; }
+    body { margin:0; min-height:100vh; color:var(--ink); background:radial-gradient(circle at 85% 0,#183a58 0,transparent 35%),#07111d; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(1180px,calc(100% - 48px)); margin:0 auto; padding:52px 0 72px; }
     header { display:flex; justify-content:space-between; align-items:end; gap:24px; margin-bottom:26px; }
     .eyebrow { color:var(--cyan); font-size:12px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
-    h1 { margin:5px 0 4px; font-size:clamp(28px,5vw,46px); letter-spacing:-.04em; }
+    h1 { margin:5px 0 4px; font-size:clamp(34px,5vw,52px); letter-spacing:-.04em; }
     .subtitle,.note { color:var(--muted); }
-    .privacy { max-width:380px; padding:12px 15px; border:1px solid var(--line); border-radius:12px; background:#0a1624cc; font-size:13px; }
-    .grid { display:grid; grid-template-columns:minmax(280px,360px) 1fr; gap:20px; }
+    .privacy { max-width:430px; padding:14px 17px; border:1px solid var(--line); border-radius:12px; background:#0a1624cc; font-size:14px; }
+    .grid { display:grid; grid-template-columns:minmax(330px,390px) 1fr; gap:22px; }
     .panel { border:1px solid var(--line); border-radius:18px; background:linear-gradient(145deg,#122033e8,#0c1725e8); box-shadow:0 20px 50px #0005; }
-    form { padding:22px; }
-    label { display:block; margin:0 0 15px; color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.04em; }
-    input { width:100%; margin-top:6px; padding:12px; color:var(--ink); border:1px solid var(--line); border-radius:10px; outline:none; background:#07111d; font:inherit; }
+    form { padding:26px; }
+    label { display:block; margin:0 0 17px; color:var(--muted); font-size:13px; font-weight:700; letter-spacing:.04em; }
+    input { width:100%; margin-top:7px; padding:13px 14px; color:var(--ink); border:1px solid var(--line); border-radius:10px; outline:none; background:#07111d; font:inherit; }
     input:focus { border-color:var(--blue); box-shadow:0 0 0 3px #50a7ff22; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     .check { display:flex; align-items:center; gap:8px; }
     .check input { width:auto; margin:0; }
-    button { width:100%; margin-top:9px; padding:13px 16px; border:0; border-radius:11px; color:#03111d; background:linear-gradient(100deg,var(--cyan),var(--blue)); font:inherit; font-weight:800; cursor:pointer; }
+    button { width:100%; margin-top:10px; padding:14px 18px; border:0; border-radius:11px; color:#03111d; background:linear-gradient(100deg,var(--cyan),var(--blue)); font:inherit; font-weight:800; cursor:pointer; }
     button:disabled { filter:grayscale(.8); cursor:wait; opacity:.65; }
     .status { min-height:23px; margin:14px 0 0; font-variant-numeric:tabular-nums; }
-    .results { min-height:510px; padding:22px; overflow:hidden; }
-    .empty { display:grid; min-height:455px; place-content:center; color:var(--muted); text-align:center; }
+    .results { min-height:550px; padding:26px; overflow:hidden; }
+    .empty { display:grid; min-height:496px; place-content:center; color:var(--muted); text-align:center; }
     .badge { display:inline-flex; padding:5px 9px; border:1px solid #55e6c155; border-radius:999px; color:var(--cyan); background:#55e6c112; font-size:12px; font-weight:800; }
     .result-card { margin-bottom:15px; padding:17px; border:1px solid var(--line); border-radius:14px; background:#07111d99; }
     .result-card h2 { margin:8px 0 2px; font-size:24px; }
@@ -127,8 +127,8 @@ _HTML = r"""<!doctype html>
     summary { color:var(--blue); cursor:pointer; }
     pre { max-height:280px; overflow:auto; padding:12px; border-radius:9px; color:#cbd9e9; background:#030a12; font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
     .error { color:var(--bad); }
-    footer { margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }
-    @media (max-width:780px) { header { display:block; } .privacy { margin-top:15px; } .grid { grid-template-columns:1fr; } .results { min-height:350px; } .empty { min-height:300px; } }
+    footer { margin-top:20px; color:var(--muted); font-size:13px; text-align:center; }
+    @media (max-width:780px) { main { width:min(100% - 28px,620px); padding-top:30px; } header { display:block; } .privacy { margin-top:17px; } .grid { grid-template-columns:1fr; } .results { min-height:350px; } .empty { min-height:290px; } }
   </style>
 </head>
 <body>

@@ -91,7 +91,7 @@ def test_v2_payload_is_sent_to_v2_endpoint(monkeypatch) -> None:
     )
 
     assert requested_urls == ["https://example.invalid/v2/shape-analyses"]
-    assert requests[0].get_header("User-agent") == "layersecurity-shadowsignal/1.4.0"
+    assert requests[0].get_header("User-agent") == "layersecurity-shadowsignal/1.4.1"
     assert result["verdict"] == "indeterminate"
 
 
